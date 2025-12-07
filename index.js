@@ -2,6 +2,12 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const port = process.env.PORT || 3000;
+const admin = require("firebase-admin");
+const serviceAccount = require("./firebaseAdminSDK.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
 
 const { MongoClient, ServerApiVersion } = require("mongodb");
 const uri = process.env.Mongo_URI;
@@ -17,6 +23,22 @@ const client = new MongoClient(uri, {
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// middleware
+const verifyJWT = async (req, res, next) => {
+  const token = req?.headers?.authorization?.split(" ")[1];
+  console.log(token);
+  if (!token) return res.status(401).send({ message: "Unauthorized Access!" });
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    req.tokenEmail = decoded.email;
+    console.log(decoded);
+    next();
+  } catch (err) {
+    console.log(err);
+    return res.status(401).send({ message: "Unauthorized Access!", err });
+  }
+};
 
 async function run() {
   try {
