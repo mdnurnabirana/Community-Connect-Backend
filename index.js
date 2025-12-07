@@ -170,8 +170,47 @@ async function run() {
       }
     });
 
+    // Delete a club (only manager)
+    app.delete("/clubs/:id", verifyJWT, verifyManager, async (req, res) => {
+      try {
+        const clubId = req.params.id;
+        const result = await clubsCollection.deleteOne({
+          _id: new ObjectId(clubId),
+        });
+
+        if (!result.deletedCount) {
+          return res.status(404).send({ message: "Club not found" });
+        }
+
+        res.send({ success: true, message: "Club deleted successfully" });
+      } catch (err) {
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+
+    // Update a club (only manager)
+    app.patch("/clubs/:id", verifyJWT, verifyManager, async (req, res) => {
+      try {
+        const clubId = req.params.id;
+        const updateData = { ...req.body, updatedAt: new Date() };
+
+        const result = await clubsCollection.updateOne(
+          { _id: new ObjectId(clubId) },
+          { $set: updateData }
+        );
+
+        if (!result.matchedCount) {
+          return res.status(404).send({ message: "Club not found" });
+        }
+
+        res.send({ success: true, message: "Club updated successfully" });
+      } catch (err) {
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+
     // Get a single club by ID
-    app.get("/clubs/:id", verifyJWT, async (req, res) => {
+    app.get("/clubs/:id", async (req, res) => {
       try {
         const clubId = req.params.id;
         const club = await clubsCollection.findOne({
