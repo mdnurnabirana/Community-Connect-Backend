@@ -160,6 +160,30 @@ async function run() {
       }
     });
 
+    // Get all clubs
+    app.get("/clubs", async (req, res) => {
+      try {
+        const clubs = await clubsCollection.find({}).toArray();
+        res.send(clubs);
+      } catch (err) {
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+
+    // Get a single club by ID
+    app.get("/clubs/:id", verifyJWT, async (req, res) => {
+      try {
+        const clubId = req.params.id;
+        const club = await clubsCollection.findOne({
+          _id: new ObjectId(clubId),
+        });
+        if (!club) return res.status(404).send({ message: "Club not found" });
+        res.send(club);
+      } catch (err) {
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
