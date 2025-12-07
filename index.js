@@ -47,6 +47,7 @@ async function run() {
 
     const db = client.db("communityDB");
     const usersCollection = db.collection("users");
+    const clubsCollection = db.collection("clubs");
 
     // role middlewares
     const verifyAdmin = async (req, res, next) => {
@@ -61,16 +62,16 @@ async function run() {
     };
 
     const verifyManager = async (req, res, next) => {
-      const email = req.tokenEmail
-      const user = await usersCollection.findOne({ email })
-      if (user?.role !== 'manager')
+      const email = req.tokenEmail;
+      const user = await usersCollection.findOne({ email });
+      if (user?.role !== "manager")
         return res
           .status(403)
-          .send({ message: 'Manager only Actions!', role: user?.role })
+          .send({ message: "Manager only Actions!", role: user?.role });
 
-      next()
-    }
-    
+      next();
+    };
+
     // Save user into collection
     app.post("/user", async (req, res) => {
       try {
@@ -124,6 +125,7 @@ async function run() {
       res.send({ success: true });
     });
 
+    // Get All User's
     app.get("/users", verifyJWT, verifyAdmin, async (req, res) => {
       const result = await usersCollection.find().toArray();
       res.send(result);
@@ -133,6 +135,29 @@ async function run() {
     app.get("/user/role", verifyJWT, async (req, res) => {
       const result = await usersCollection.findOne({ email: req.tokenEmail });
       res.send({ role: result?.role });
+    });
+
+    // Club Related Api's
+    app.post("/clubs", verifyJWT, verifyManager, async (req, res) => {
+      try {
+        const club = req.body;
+
+        const newClub = {
+          ...club,
+          status: "pending",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+
+        const result = await clubsCollection.insertOne(newClub);
+
+        res.send({
+          success: true,
+          clubId: result.insertedId,
+        });
+      } catch (err) {
+        res.status(500).send({ message: "Server error" });
+      }
     });
 
     // Send a ping to confirm a successful connection
