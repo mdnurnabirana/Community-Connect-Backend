@@ -4,6 +4,7 @@ const cors = require("cors");
 const port = process.env.PORT || 3000;
 const admin = require("firebase-admin");
 const serviceAccount = require("./firebaseAdminSDK.json");
+const { ObjectId } = require("mongodb");
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -89,6 +90,26 @@ async function run() {
         console.error(err);
         res.status(500).send({ message: "Server error" });
       }
+    });
+
+    // Update Role API
+    app.patch("/users/:id/role", verifyJWT, verifyAdmin, async (req, res) => {
+      const { id } = req.params;
+      const { role } = req.body;
+
+      const user = await usersCollection.findOne({ _id: new ObjectId(id) });
+      if (!user) return res.status(404).send({ message: "User not found" });
+
+      if (user.email === req.tokenEmail && role === "manager") {
+        return res.status(403).send({ message: "Not allowed" });
+      }
+
+      await usersCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { role } }
+      );
+
+      res.send({ success: true });
     });
 
     app.get("/users", verifyJWT, verifyAdmin, async (req, res) => {
