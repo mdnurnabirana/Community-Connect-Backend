@@ -47,6 +47,17 @@ async function run() {
     const db = client.db("communityDB");
     const usersCollection = db.collection("users");
 
+    // role middlewares
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.tokenEmail;
+      const user = await usersCollection.findOne({ email });
+      if (user?.role !== "admin")
+        return res
+          .status(403)
+          .send({ message: "Admin only Actions!", role: user?.role });
+
+      next();
+    };
     // Save user into collection
     app.post("/user", async (req, res) => {
       try {
@@ -58,7 +69,7 @@ async function run() {
 
         const existingUser = await usersCollection.findOne({ email });
         if (existingUser) {
-          return res.status(409).send({ message: "User already exists" });
+          return res.status(200).send(existingUser);
         }
 
         const newUser = {
@@ -78,6 +89,11 @@ async function run() {
         console.error(err);
         res.status(500).send({ message: "Server error" });
       }
+    });
+
+    app.get("/users", verifyJWT, verifyAdmin, async (req, res) => {
+      const result = await usersCollection.find().toArray();
+      res.send(result);
     });
 
     // Get user Role
