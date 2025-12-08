@@ -138,7 +138,7 @@ async function run() {
     });
 
     // Club Related Api's
-    app.post("/clubs", verifyJWT, verifyManager, async (req, res) => {
+    app.post("/manager/clubs", verifyJWT, verifyManager, async (req, res) => {
       try {
         const club = req.body;
 
@@ -161,67 +161,112 @@ async function run() {
     });
 
     // Get all clubs
-    app.get("/clubs", async (req, res) => {
+    // Get All Clubs (Only Own Clubs)
+    app.get("/manager/clubs", verifyJWT, verifyManager, async (req, res) => {
       try {
-        const clubs = await clubsCollection.find({}).toArray();
+        const email = req.tokenEmail;
+
+        const clubs = await clubsCollection
+          .find({ managerEmail: email })
+          .toArray();
+
         res.send(clubs);
       } catch (err) {
         res.status(500).send({ message: "Server error" });
       }
     });
 
-    // Delete a club (only manager)
-    app.delete("/clubs/:id", verifyJWT, verifyManager, async (req, res) => {
-      try {
-        const clubId = req.params.id;
-        const result = await clubsCollection.deleteOne({
-          _id: new ObjectId(clubId),
-        });
+    // Get Single Club by ID (Only Own Club)
+    app.get(
+      "/manager/clubs/:id",
+      verifyJWT,
+      verifyManager,
+      async (req, res) => {
+        try {
+          const email = req.tokenEmail;
+          const clubId = req.params.id;
 
-        if (!result.deletedCount) {
-          return res.status(404).send({ message: "Club not found" });
+          const club = await clubsCollection.findOne({
+            _id: new ObjectId(clubId),
+            managerEmail: email,
+          });
+
+          if (!club) {
+            return res
+              .status(404)
+              .send({ message: "Club not found or unauthorized" });
+          }
+
+          res.send(club);
+        } catch (err) {
+          res.status(500).send({ message: "Server error" });
         }
-
-        res.send({ success: true, message: "Club deleted successfully" });
-      } catch (err) {
-        res.status(500).send({ message: "Server error" });
       }
-    });
+    );
 
-    // Update a club (only manager)
-    app.patch("/clubs/:id", verifyJWT, verifyManager, async (req, res) => {
-      try {
-        const clubId = req.params.id;
-        const updateData = { ...req.body, updatedAt: new Date() };
+    // Update Club (Only Own Club)
+    app.patch(
+      "/manager/clubs/:id",
+      verifyJWT,
+      verifyManager,
+      async (req, res) => {
+        try {
+          const email = req.tokenEmail;
+          const clubId = req.params.id;
 
-        const result = await clubsCollection.updateOne(
-          { _id: new ObjectId(clubId) },
-          { $set: updateData }
-        );
+          const updateData = {
+            ...req.body,
+            updatedAt: new Date(),
+          };
 
-        if (!result.matchedCount) {
-          return res.status(404).send({ message: "Club not found" });
+          const result = await clubsCollection.updateOne(
+            {
+              _id: new ObjectId(clubId),
+              managerEmail: email,
+            },
+            { $set: updateData }
+          );
+
+          if (!result.matchedCount) {
+            return res
+              .status(404)
+              .send({ message: "Club not found or unauthorized" });
+          }
+
+          res.send({ success: true, message: "Club updated successfully" });
+        } catch (err) {
+          res.status(500).send({ message: "Server error" });
         }
-
-        res.send({ success: true, message: "Club updated successfully" });
-      } catch (err) {
-        res.status(500).send({ message: "Server error" });
       }
-    });
+    );
 
-    // Get a single club by ID
-    app.get("/clubs/:id", async (req, res) => {
-      try {
-        const clubId = req.params.id;
-        const club = await clubsCollection.findOne({
-          _id: new ObjectId(clubId),
-        });
-        if (!club) return res.status(404).send({ message: "Club not found" });
-        res.send(club);
-      } catch (err) {
-        res.status(500).send({ message: "Server error" });
+    // Delete Club (Only Own Club)
+    app.delete(
+      "/manager/clubs/:id",
+      verifyJWT,
+      verifyManager,
+      async (req, res) => {
+        try {
+          const email = req.tokenEmail;
+          const clubId = req.params.id;
+
+          const result = await clubsCollection.deleteOne({
+            _id: new ObjectId(clubId),
+            managerEmail: email,
+          });
+
+          if (!result.deletedCount) {
+            return res
+              .status(404)
+              .send({ message: "Club not found or unauthorized" });
+          }
+
+          res.send({ success: true, message: "Club deleted successfully" });
+        } catch (err) {
+          res.status(500).send({ message: "Server error" });
+        }
       }
-    });
+    );
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
