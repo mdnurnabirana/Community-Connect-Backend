@@ -349,12 +349,10 @@ async function run() {
         const clubId = req.params.id;
         const userEmail = req.tokenEmail;
 
-        // Validate ObjectId
         if (!ObjectId.isValid(clubId)) {
           return res.status(400).send({ message: "Invalid club id" });
         }
 
-        // Find club
         const club = await clubsCollection.findOne({
           _id: new ObjectId(clubId),
         });
@@ -363,7 +361,6 @@ async function run() {
           return res.status(404).send({ message: "Club not found" });
         }
 
-        // Check if user already has membership
         const existingMembership = await membershipsCollection.findOne({
           clubId: clubId,
           userEmail: userEmail,
@@ -398,7 +395,7 @@ async function run() {
           clubId,
           status: "pendingPayment",
           joinedAt: new Date(),
-          expiresAt: null,
+          expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24),
           paymentId: null,
         };
 
@@ -457,12 +454,12 @@ async function run() {
           return res.status(400).send({ message: "Payment not completed" });
         }
 
-        // Update membership to active
         await membershipsCollection.updateOne(
           { _id: new ObjectId(membershipId) },
           {
             $set: {
               status: "active",
+              expiresAt: new Date(Date.now() + 365.25 * 86_400_000),
               paymentId: session.payment_intent,
             },
           }
@@ -477,7 +474,6 @@ async function run() {
       }
     });
 
-    // Get all active memberships for logged-in user
     app.get("/active-memberships", verifyJWT, async (req, res) => {
       try {
         const userEmail = req.tokenEmail;
@@ -512,6 +508,61 @@ async function run() {
         res.status(500).send({ message: "Failed to fetch memberships" });
       }
     });
+
+    app.get(
+      "/club-members/:clubId",
+      verifyJWT,
+      verifyManager,
+      async (req, res) => {
+        try {
+          const { clubId } = req.params;
+          const managerEmail = req.tokenEmail;
+
+          // Check if this club belongs to this manager
+          const club = await clubsCollection.findOne({
+            _id: new ObjectId(clubId),
+            managerEmail,
+          });
+
+          if (!club) {
+            return res.status(403).send({ message: "Unauthorized access" });
+          }
+
+          const members = await membershipsCollection
+            .find({ clubId })
+            .toArray();
+
+          res.send(members);
+        } catch (err) {
+          res.status(500).send({ message: "Failed to fetch members" });
+        }
+      }
+    );
+
+    app.patch(
+      "/expire-member/:id",
+      verifyJWT,
+      verifyManager,
+      async (req, res) => {
+        try {
+          const { id } = req.params;
+
+          const result = await membershipsCollection.updateOne(
+            { _id: new ObjectId(id) },
+            {
+              $set: {
+                expiresAt: new Date(Date.now() - 86400000), // yesterday
+                status: "expired",
+              },
+            }
+          );
+
+          res.send({ success: true, result });
+        } catch (err) {
+          res.status(500).send({ message: "Failed to expire member" });
+        }
+      }
+    );
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
