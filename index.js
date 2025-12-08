@@ -477,6 +477,42 @@ async function run() {
       }
     });
 
+    // Get all active memberships for logged-in user
+    app.get("/active-memberships", verifyJWT, async (req, res) => {
+      try {
+        const userEmail = req.tokenEmail;
+
+        const memberships = await membershipsCollection
+          .find({ userEmail, status: "active" })
+          .toArray();
+
+        if (!memberships.length) {
+          return res.send([]);
+        }
+
+        const clubIds = memberships.map((m) => new ObjectId(m.clubId));
+
+        const clubs = await clubsCollection
+          .find({ _id: { $in: clubIds } })
+          .toArray();
+
+        const combined = memberships.map((m) => {
+          const club = clubs.find((c) => c._id.toString() === m.clubId);
+          return {
+            ...m,
+            clubName: club?.clubName,
+            location: club?.location,
+            bannerImage: club?.bannerImage,
+          };
+        });
+
+        res.send(combined);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Failed to fetch memberships" });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
