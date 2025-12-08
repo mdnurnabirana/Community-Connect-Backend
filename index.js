@@ -5,6 +5,7 @@ const port = process.env.PORT || 3000;
 const admin = require("firebase-admin");
 const serviceAccount = require("./firebaseAdminSDK.json");
 const { ObjectId } = require("mongodb");
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -48,6 +49,7 @@ async function run() {
     const db = client.db("communityDB");
     const usersCollection = db.collection("users");
     const clubsCollection = db.collection("clubs");
+    const membershipsCollection = db.collection("memberships");
 
     // role middlewares
     const verifyAdmin = async (req, res, next) => {
@@ -175,7 +177,6 @@ async function run() {
       }
     });
 
-    // Get Single Club by ID (Only Own Club)
     app.get(
       "/manager/clubs/:id",
       verifyJWT,
@@ -339,6 +340,140 @@ async function run() {
         res.json(club);
       } catch (err) {
         res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // Join club & redirect based on price
+    app.post("/clubs/:id/join", verifyJWT, async (req, res) => {
+      try {
+        const clubId = req.params.id;
+        const userEmail = req.tokenEmail;
+
+        // Validate ObjectId
+        if (!ObjectId.isValid(clubId)) {
+          return res.status(400).send({ message: "Invalid club id" });
+        }
+
+        // Find club
+        const club = await clubsCollection.findOne({
+          _id: new ObjectId(clubId),
+        });
+
+        if (!club) {
+          return res.status(404).send({ message: "Club not found" });
+        }
+
+        // Check if user already has membership
+        const existingMembership = await membershipsCollection.findOne({
+          clubId: clubId,
+          userEmail: userEmail,
+        });
+
+        if (existingMembership) {
+          return res
+            .status(400)
+            .send({ message: "You already joined this club" });
+        }
+
+        if (club.membershipFee === 0) {
+          const membership = {
+            userEmail,
+            clubId,
+            status: "active",
+            joinedAt: new Date(),
+            expiresAt: null,
+            paymentId: null,
+          };
+
+          await membershipsCollection.insertOne(membership);
+
+          return res.send({
+            free: true,
+            message: "Joined successfully",
+          });
+        }
+
+        const pendingMembership = {
+          userEmail,
+          clubId,
+          status: "pendingPayment",
+          joinedAt: new Date(),
+          expiresAt: null,
+          paymentId: null,
+        };
+
+        const result = await membershipsCollection.insertOne(pendingMembership);
+
+        const session = await stripe.checkout.sessions.create({
+          payment_method_types: ["card"],
+          line_items: [
+            {
+              price_data: {
+                currency: "usd",
+                product_data: {
+                  name: club.clubName,
+                  description: club.description,
+                  images: club.bannerImage ? [club.bannerImage] : [],
+                },
+                unit_amount: club.membershipFee * 100,
+              },
+              quantity: 1,
+            },
+          ],
+          mode: "payment",
+          customer_email: userEmail,
+          metadata: {
+            membershipId: result.insertedId.toString(),
+            clubId: clubId,
+            userEmail: userEmail,
+          },
+          success_url: `${process.env.CLIENT_DOMAIN}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${process.env.CLIENT_DOMAIN}/club/${clubId}`,
+        });
+
+        res.send({
+          free: false,
+          checkoutUrl: session.url,
+        });
+      } catch (err) {
+        console.error("JOIN CLUB ERROR DETAILS:");
+        console.error(err);
+        res.status(500).send({
+          message: "Internal server error",
+          error: err.message,
+        });
+      }
+    });
+
+    app.post("/payment-success", async (req, res) => {
+      try {
+        const { sessionId } = req.body;
+
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+        const membershipId = session.metadata.membershipId;
+
+        if (session.payment_status !== "paid") {
+          return res.status(400).send({ message: "Payment not completed" });
+        }
+
+        // Update membership to active
+        await membershipsCollection.updateOne(
+          { _id: new ObjectId(membershipId) },
+          {
+            $set: {
+              status: "active",
+              paymentId: session.payment_intent,
+            },
+          }
+        );
+
+        res.send({
+          success: true,
+          transactionId: session.payment_intent,
+        });
+      } catch (err) {
+        res.status(500).send({ message: "Payment verification failed" });
       }
     });
 
