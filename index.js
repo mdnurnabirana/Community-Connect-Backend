@@ -312,6 +312,19 @@ async function run() {
       }
     );
 
+    // Get all approved clubs
+    app.get("/clubs/approved", async (req, res) => {
+      try {
+        const approvedClubs = await clubsCollection
+          .find({ status: "approved" })
+          .toArray();
+        res.send(approvedClubs);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
