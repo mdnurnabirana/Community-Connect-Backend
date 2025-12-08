@@ -325,6 +325,23 @@ async function run() {
       }
     });
 
+    // GET /clubs/:id
+    app.get("/club/:id", async (req, res) => {
+      const { id } = req.params;
+
+      try {
+        const club = await clubsCollection.findOne({ _id: new ObjectId(id) });
+
+        if (!club) {
+          return res.status(404).json({ message: "Club not found" });
+        }
+
+        res.json(club);
+      } catch (err) {
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
