@@ -160,7 +160,6 @@ async function run() {
       }
     });
 
-    // Get all clubs
     // Get All Clubs (Only Own Clubs)
     app.get("/manager/clubs", verifyJWT, verifyManager, async (req, res) => {
       try {
@@ -262,6 +261,51 @@ async function run() {
           }
 
           res.send({ success: true, message: "Club deleted successfully" });
+        } catch (err) {
+          res.status(500).send({ message: "Server error" });
+        }
+      }
+    );
+
+    // Get All Clubs (Admin Only)
+    app.get("/admin/clubs", verifyJWT, verifyAdmin, async (req, res) => {
+      try {
+        const clubs = await clubsCollection.find({}).toArray();
+        res.send(clubs);
+      } catch (err) {
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+
+    // Update Club Status (Admin Only)
+    app.patch(
+      "/admin/clubs/:id/status",
+      verifyJWT,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const clubId = req.params.id;
+          const { status } = req.body;
+
+          if (!status) {
+            return res.status(400).send({ message: "Status is required" });
+          }
+
+          const result = await clubsCollection.updateOne(
+            { _id: new ObjectId(clubId) },
+            {
+              $set: {
+                status,
+                updatedAt: new Date(),
+              },
+            }
+          );
+
+          if (!result.matchedCount) {
+            return res.status(404).send({ message: "Club not found" });
+          }
+
+          res.send({ success: true, message: "Status updated successfully" });
         } catch (err) {
           res.status(500).send({ message: "Server error" });
         }
