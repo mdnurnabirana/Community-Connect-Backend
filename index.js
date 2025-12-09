@@ -26,7 +26,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// middleware
+// Member role verification middleware via - JWT (Firebase)
 const verifyJWT = async (req, res, next) => {
   const token = req?.headers?.authorization?.split(" ")[1];
   console.log(token);
@@ -46,12 +46,18 @@ async function run() {
   try {
     await client.connect();
 
+    // Database
     const db = client.db("communityDB");
+
+    // All db collection's
     const usersCollection = db.collection("users");
     const clubsCollection = db.collection("clubs");
     const membershipsCollection = db.collection("memberships");
+    const eventsCollection = db.collection("events");
+    const eventRegistrationCollection = db.collection("eventRegistrations");
+    const paymentsCollection = db.collection("payments");
 
-    // role middlewares
+    // Admin role verification middleware
     const verifyAdmin = async (req, res, next) => {
       const email = req.tokenEmail;
       const user = await usersCollection.findOne({ email });
@@ -59,10 +65,10 @@ async function run() {
         return res
           .status(403)
           .send({ message: "Admin only Actions!", role: user?.role });
-
       next();
     };
 
+    // Manager role verification middleware
     const verifyManager = async (req, res, next) => {
       const email = req.tokenEmail;
       const user = await usersCollection.findOne({ email });
@@ -177,6 +183,7 @@ async function run() {
       }
     });
 
+    // Manager's Club
     app.get(
       "/manager/clubs/:id",
       verifyJWT,
@@ -563,6 +570,69 @@ async function run() {
         }
       }
     );
+
+    // Manager's approved club's listing.
+    app.get(
+      "/manager-approved/clubs",
+      verifyJWT,
+      verifyManager,
+      async (req, res) => {
+        try {
+          const email = req.tokenEmail;
+
+          const query = {
+            managerEmail: email,
+            status: "approved",
+          };
+
+          const clubs = await clubsCollection.find(query).toArray();
+
+          res.send(clubs);
+        } catch (err) {
+          console.error("Manager clubs error:", err);
+          res.status(500).send({ message: "Server error" });
+        }
+      }
+    );
+
+    app.post("/events", verifyJWT, verifyManager, async (req, res) => {
+      try {
+        const managerEmail = req.tokenEmail;
+        const {
+          clubId,
+          title,
+          description,
+          eventDate,
+          location,
+          isPaid,
+          eventFee,
+          maxAttendees,
+        } = req.body;
+
+        const newEvent = {
+          clubId,
+          title,
+          description,
+          eventDate: new Date(eventDate),
+          location,
+          isPaid: !!isPaid,
+          eventFee: isPaid ? Number(eventFee) : 0,
+          maxAttendees: maxAttendees ? Number(maxAttendees) : null,
+          createdAt: new Date(),
+        };
+
+        const result = await eventsCollection.insertOne(newEvent);
+
+        res.send({
+          success: true,
+          eventId: result.insertedId,
+          message: "Event created",
+        });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Server error while creating event" });
+      }
+    });
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
