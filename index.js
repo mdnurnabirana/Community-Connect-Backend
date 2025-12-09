@@ -662,7 +662,6 @@ async function run() {
       }
     });
 
-    // Delete an event (manager only)
     app.delete("/events/:id", verifyJWT, verifyManager, async (req, res) => {
       try {
         const eventId = req.params.id;
@@ -695,6 +694,61 @@ async function run() {
       } catch (err) {
         console.error(err);
         res.status(500).send({ message: "Failed to delete event" });
+      }
+    });
+
+    app.get("/events/:id", verifyJWT, verifyManager, async (req, res) => {
+      try {
+        const eventId = req.params.id;
+        const event = await eventsCollection.findOne({
+          _id: new ObjectId(eventId),
+        });
+        if (!event) return res.status(404).send({ message: "Event not found" });
+
+        const club = await clubsCollection.findOne({
+          _id: new ObjectId(event.clubId),
+        });
+        res.send({ ...event, clubName: club?.clubName });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Failed to fetch event" });
+      }
+    });
+
+    app.patch("/events/:id", verifyJWT, verifyManager, async (req, res) => {
+      try {
+        const managerEmail = req.tokenEmail;
+        const eventId = req.params.id;
+        const updateData = { ...req.body, updatedAt: new Date() };
+
+        const event = await eventsCollection.findOne({
+          _id: new ObjectId(eventId),
+        });
+        if (!event) return res.status(404).send({ message: "Event not found" });
+
+        const club = await clubsCollection.findOne({
+          _id: new ObjectId(event.clubId),
+          managerEmail,
+          status: "approved",
+        });
+
+        if (!club)
+          return res
+            .status(403)
+            .send({ message: "Unauthorized to update this event" });
+
+        await eventsCollection.updateOne(
+          { _id: new ObjectId(eventId) },
+          { $set: updateData }
+        );
+
+        const updatedEvent = await eventsCollection.findOne({
+          _id: new ObjectId(eventId),
+        });
+        res.send(updatedEvent);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Failed to update event" });
       }
     });
 
