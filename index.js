@@ -752,6 +752,36 @@ async function run() {
       }
     });
 
+    // Get all events (public)
+    app.get("/all-events", async (req, res) => {
+      try {
+        const events = await eventsCollection.find().toArray();
+
+        res.send(events);
+      } catch (error) {
+        console.error("Error fetching events:", error);
+        res.status(500).send([]);
+      }
+    });
+
+    app.get("/event/:id", async (req, res) => {
+      const { id } = req.params;
+
+      try {
+        const event = await eventsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!event) {
+          return res.status(404).send({ message: "Event not found" });
+        }
+
+        res.send(event);
+      } catch (err) {
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
