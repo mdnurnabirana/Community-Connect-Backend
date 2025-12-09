@@ -634,6 +634,70 @@ async function run() {
       }
     });
 
+    app.get("/manager/events", verifyJWT, verifyManager, async (req, res) => {
+      try {
+        const email = req.tokenEmail;
+        const managerClubs = await clubsCollection
+          .find({ managerEmail: email, status: "approved" })
+          .toArray();
+
+        const clubIds = managerClubs.map((c) => c._id.toString());
+
+        const events = await eventsCollection
+          .find({ clubId: { $in: clubIds } })
+          .toArray();
+
+        const merged = events.map((e) => {
+          const club = managerClubs.find((c) => c._id.toString() === e.clubId);
+          return {
+            ...e,
+            clubName: club?.clubName || "Unknown Club",
+          };
+        });
+
+        res.send(merged);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Failed to fetch events" });
+      }
+    });
+
+    // Delete an event (manager only)
+    app.delete("/events/:id", verifyJWT, verifyManager, async (req, res) => {
+      try {
+        const eventId = req.params.id;
+        const managerEmail = req.tokenEmail;
+
+        // Fetch the event
+        const event = await eventsCollection.findOne({
+          _id: new ObjectId(eventId),
+        });
+        if (!event) {
+          return res.status(404).send({ message: "Event not found" });
+        }
+
+        // Verify manager owns the club
+        const club = await clubsCollection.findOne({
+          _id: new ObjectId(event.clubId),
+          managerEmail: managerEmail,
+          status: "approved",
+        });
+        if (!club) {
+          return res
+            .status(403)
+            .send({ message: "You are not authorized to delete this event" });
+        }
+
+        // Delete the event
+        await eventsCollection.deleteOne({ _id: new ObjectId(eventId) });
+
+        res.send({ message: "Event deleted successfully" });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Failed to delete event" });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
