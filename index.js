@@ -782,6 +782,134 @@ async function run() {
       }
     });
 
+    // Register for event (free or paid)
+    app.post("/event-payment/:id/register", verifyJWT, async (req, res) => {
+      try {
+        const eventId = req.params.id;
+        const userEmail = req.tokenEmail;
+
+        if (!ObjectId.isValid(eventId)) {
+          return res.status(400).send({ message: "Invalid event id" });
+        }
+
+        const event = await eventsCollection.findOne({
+          _id: new ObjectId(eventId),
+        });
+
+        if (!event) {
+          return res.status(404).send({ message: "Event not found" });
+        }
+
+        const exists = await eventRegistrationCollection.findOne({
+          eventId,
+          userEmail,
+          status: { $ne: "cancelled" },
+        });
+
+        if (exists) {
+          return res.status(400).send({
+            message: "You already registered for this event",
+          });
+        }
+
+        if (!event.isPaid || event.eventFee === 0) {
+          const registration = {
+            eventId,
+            clubId: event.clubId,
+            userEmail,
+            status: "registered",
+            paymentId: null,
+            registeredAt: new Date(),
+          };
+
+          await eventRegistrationCollection.insertOne(registration);
+
+          return res.send({
+            free: true,
+            message: "Registered successfully",
+          });
+        }
+
+        const pendingRegistration = {
+          eventId,
+          clubId: event.clubId,
+          userEmail,
+          status: "pendingPayment",
+          paymentId: null,
+          registeredAt: new Date(),
+        };
+
+        const result = await eventRegistrationCollection.insertOne(
+          pendingRegistration
+        );
+
+        const session = await stripe.checkout.sessions.create({
+          payment_method_types: ["card"],
+          line_items: [
+            {
+              price_data: {
+                currency: "usd",
+                product_data: {
+                  name: event.title,
+                  description: event.description,
+                },
+                unit_amount: event.eventFee * 100,
+              },
+              quantity: 1,
+            },
+          ],
+          mode: "payment",
+          customer_email: userEmail,
+          metadata: {
+            registrationId: result.insertedId.toString(),
+            eventId,
+            userEmail,
+          },
+          success_url: `${process.env.CLIENT_DOMAIN}/event-payment-success?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${process.env.CLIENT_DOMAIN}/event/${eventId}`,
+        });
+
+        res.send({
+          free: false,
+          checkoutUrl: session.url,
+        });
+      } catch (err) {
+        console.error("EVENT REGISTRATION ERROR:", err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    app.post("/event-payment-success", async (req, res) => {
+      try {
+        const { sessionId } = req.body;
+
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+        const registrationId = session.metadata.registrationId;
+
+        if (session.payment_status !== "paid") {
+          return res.status(400).send({ message: "Payment not completed" });
+        }
+
+        await eventRegistrationCollection.updateOne(
+          { _id: new ObjectId(registrationId) },
+          {
+            $set: {
+              status: "registered",
+              paymentId: session.payment_intent,
+            },
+          }
+        );
+
+        res.send({
+          success: true,
+          transactionId: session.payment_intent,
+        });
+      } catch (err) {
+        res.status(500).send({ message: "Payment verification failed" });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
