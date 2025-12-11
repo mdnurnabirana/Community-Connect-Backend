@@ -456,38 +456,55 @@ async function run() {
         const session = await stripe.checkout.sessions.retrieve(sessionId);
 
         const membershipId = session.metadata.membershipId;
+        const paymentIntentId = session.payment_intent; // Add this line
 
         if (session.payment_status !== "paid") {
           return res.status(400).send({ message: "Payment not completed" });
         }
 
+        // Update membership
         await membershipsCollection.updateOne(
           { _id: new ObjectId(membershipId) },
           {
             $set: {
               status: "active",
               expiresAt: new Date(Date.now() + 365.25 * 86_400_000),
-              paymentId: session.payment_intent,
+              paymentId: paymentIntentId,
             },
           }
         );
 
+        // Check duplicate
+        const existingPayment = await paymentsCollection.findOne({
+          stripePaymentIntentId: paymentIntentId,
+        });
+
+        if (existingPayment) {
+          return res.send({
+            success: true,
+            transactionId: paymentIntentId,
+            message: "Already processed",
+          });
+        }
+
+        // Insert payment record
         await paymentsCollection.insertOne({
           userEmail: session.metadata.userEmail,
           amount: session.amount_total / 100,
           type: "membership",
           clubId: session.metadata.clubId,
           eventId: null,
-          stripePaymentIntentId: session.payment_intent,
+          stripePaymentIntentId: paymentIntentId,
           status: "completed",
           createdAt: new Date(),
         });
 
         res.send({
           success: true,
-          transactionId: session.payment_intent,
+          transactionId: paymentIntentId,
         });
       } catch (err) {
+        console.error(err);
         res.status(500).send({ message: "Payment verification failed" });
       }
     });
@@ -893,37 +910,54 @@ async function run() {
         const session = await stripe.checkout.sessions.retrieve(sessionId);
 
         const registrationId = session.metadata.registrationId;
+        const paymentIntentId = session.payment_intent; // Define it
 
         if (session.payment_status !== "paid") {
           return res.status(400).send({ message: "Payment not completed" });
         }
 
+        // Update registration
         await eventRegistrationCollection.updateOne(
           { _id: new ObjectId(registrationId) },
           {
             $set: {
               status: "registered",
-              paymentId: session.payment_intent,
+              paymentId: paymentIntentId,
             },
           }
         );
 
+        // Prevent duplicate payment record
+        const existingPayment = await paymentsCollection.findOne({
+          stripePaymentIntentId: paymentIntentId,
+        });
+
+        if (existingPayment) {
+          return res.send({
+            success: true,
+            transactionId: paymentIntentId,
+            message: "Already processed",
+          });
+        }
+
+        // Insert payment record
         await paymentsCollection.insertOne({
           userEmail: session.metadata.userEmail,
           amount: session.amount_total / 100,
           type: "event",
           clubId: null,
           eventId: session.metadata.eventId,
-          stripePaymentIntentId: session.payment_intent,
+          stripePaymentIntentId: paymentIntentId,
           status: "completed",
           createdAt: new Date(),
         });
 
         res.send({
           success: true,
-          transactionId: session.payment_intent,
+          transactionId: paymentIntentId,
         });
       } catch (err) {
+        console.error(err);
         res.status(500).send({ message: "Payment verification failed" });
       }
     });
@@ -968,6 +1002,48 @@ async function run() {
       } catch (err) {
         console.error(err);
         res.status(500).send({ message: "Server error" });
+      }
+    });
+
+    // Get user's payment history
+    app.get("/my-payments", verifyJWT, async (req, res) => {
+      try {
+        const userEmail = req.tokenEmail;
+
+        const payments = await paymentsCollection
+          .find({ userEmail })
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        const clubIds = payments
+          .filter((p) => p.clubId)
+          .map((p) => new ObjectId(p.clubId));
+
+        const clubs =
+          clubIds.length > 0
+            ? await clubsCollection.find({ _id: { $in: clubIds } }).toArray()
+            : [];
+
+        const result = payments.map((payment) => {
+          const club = clubs.find((c) => c._id.toString() === payment.clubId);
+          return {
+            amount: payment.amount,
+            type: payment.type,
+            clubName:
+              payment.type === "membership"
+                ? club?.clubName || "Unknown Club"
+                : null,
+            eventName: payment.type === "event" ? "Event Fee" : null,
+            status: payment.status,
+            date: payment.createdAt,
+            transactionId: payment.stripePaymentIntentId,
+          };
+        });
+
+        res.send(result);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Failed to fetch payments" });
       }
     });
 
