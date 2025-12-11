@@ -1120,6 +1120,151 @@ async function run() {
       }
     });
 
+    // Member dashboard overview
+    app.get("/member/overview", verifyJWT, async (req, res) => {
+      try {
+        const userEmail = req.tokenEmail;
+
+        // Active memberships
+        const memberships = await membershipsCollection
+          .find({ userEmail, status: "active" })
+          .toArray();
+
+        const totalClubsJoined = memberships.length;
+
+        // Registered events
+        const registrations = await eventRegistrationCollection
+          .find({ userEmail, status: "registered" })
+          .toArray();
+
+        const totalEventsRegistered = registrations.length;
+
+        // Upcoming events (future date)
+        const now = new Date();
+        const eventIds = registrations.map((r) => new ObjectId(r.eventId));
+        const upcomingEvents = await eventsCollection
+          .find({
+            _id: { $in: eventIds },
+            eventDate: { $gt: now },
+          })
+          .sort({ eventDate: 1 })
+          .limit(5)
+          .toArray();
+
+        // Add club name
+        const clubIds = upcomingEvents.map((e) => new ObjectId(e.clubId));
+        const clubs = await clubsCollection
+          .find({ _id: { $in: clubIds } })
+          .toArray();
+
+        const upcomingWithClub = upcomingEvents.map((e) => {
+          const club = clubs.find((c) => c._id.toString() === e.clubId);
+          return {
+            title: e.title,
+            eventDate: e.eventDate,
+            location: e.location,
+            clubName: club?.clubName || "Unknown Club",
+          };
+        });
+
+        res.send({
+          totalClubsJoined,
+          totalEventsRegistered,
+          upcomingEvents: upcomingWithClub,
+        });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+
+    // Manager dashboard overview
+    app.get("/manager/overview", verifyJWT, verifyManager, async (req, res) => {
+      try {
+        const managerEmail = req.tokenEmail;
+
+        const clubs = await clubsCollection
+          .find({ managerEmail, status: "approved" })
+          .toArray();
+
+        const clubIds = clubs.map((c) => c._id.toString());
+
+        const [memberships, events, payments] = await Promise.all([
+          membershipsCollection.countDocuments({
+            clubId: { $in: clubIds },
+            status: "active",
+          }),
+          eventsCollection.countDocuments({ clubId: { $in: clubIds } }),
+          paymentsCollection
+            .aggregate([
+              {
+                $match: {
+                  clubId: { $in: clubIds },
+                  type: "membership",
+                  status: "completed",
+                },
+              },
+              { $group: { _id: null, total: { $sum: "$amount" } } },
+            ])
+            .toArray(),
+        ]);
+
+        res.send({
+          totalClubs: clubs.length,
+          totalMembers: memberships,
+          totalEvents: events,
+          totalRevenue: payments[0]?.total || 0,
+        });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+
+    // Admin overview
+    app.get("/admin/overview", verifyJWT, verifyAdmin, async (req, res) => {
+      try {
+        const [
+          totalUsers,
+          clubsStats,
+          totalMemberships,
+          totalEvents,
+          totalPayments,
+        ] = await Promise.all([
+          usersCollection.countDocuments({}),
+          clubsCollection
+            .aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }])
+            .toArray(),
+          membershipsCollection.countDocuments({ status: "active" }),
+          eventsCollection.countDocuments({}),
+          paymentsCollection
+            .aggregate([
+              { $match: { status: "completed" } },
+              { $group: { _id: null, total: { $sum: "$amount" } } },
+            ])
+            .toArray(),
+        ]);
+
+        const clubs = {
+          pending: clubsStats.find((c) => c._id === "pending")?.count || 0,
+          approved: clubsStats.find((c) => c._id === "approved")?.count || 0,
+          rejected: clubsStats.find((c) => c._id === "rejected")?.count || 0,
+          total: clubsStats.reduce((sum, c) => sum + c.count, 0),
+        };
+
+        res.send({
+          totalUsers,
+          clubs,
+          totalMemberships,
+          totalEvents,
+          totalRevenue: totalPayments[0]?.total || 0,
+        });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
