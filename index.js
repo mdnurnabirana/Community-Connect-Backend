@@ -1084,6 +1084,42 @@ async function run() {
       }
     );
 
+    // Admin: All payments
+    app.get("/admin/payments", verifyJWT, verifyAdmin, async (req, res) => {
+      try {
+        const payments = await paymentsCollection
+          .find({})
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        const clubIds = payments
+          .filter((p) => p.clubId)
+          .map((p) => new ObjectId(p.clubId));
+
+        const clubs =
+          clubIds.length > 0
+            ? await clubsCollection.find({ _id: { $in: clubIds } }).toArray()
+            : [];
+
+        const result = payments.map((p) => ({
+          userEmail: p.userEmail,
+          amount: p.amount,
+          type: p.type,
+          clubName:
+            p.type === "membership"
+              ? clubs.find((c) => c._id.toString() === p.clubId)?.clubName ||
+                "Unknown Club"
+              : null,
+          date: p.createdAt,
+        }));
+
+        res.send(result);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
