@@ -472,6 +472,17 @@ async function run() {
           }
         );
 
+        await paymentsCollection.insertOne({
+          userEmail: session.metadata.userEmail,
+          amount: session.amount_total / 100,
+          type: "membership",
+          clubId: session.metadata.clubId,
+          eventId: null,
+          stripePaymentIntentId: session.payment_intent,
+          status: "completed",
+          createdAt: new Date(),
+        });
+
         res.send({
           success: true,
           transactionId: session.payment_intent,
@@ -488,10 +499,6 @@ async function run() {
         const memberships = await membershipsCollection
           .find({ userEmail, status: "active" })
           .toArray();
-
-        if (!memberships.length) {
-          return res.send([]);
-        }
 
         const clubIds = memberships.map((m) => new ObjectId(m.clubId));
 
@@ -901,12 +908,66 @@ async function run() {
           }
         );
 
+        await paymentsCollection.insertOne({
+          userEmail: session.metadata.userEmail,
+          amount: session.amount_total / 100,
+          type: "event",
+          clubId: null,
+          eventId: session.metadata.eventId,
+          stripePaymentIntentId: session.payment_intent,
+          status: "completed",
+          createdAt: new Date(),
+        });
+
         res.send({
           success: true,
           transactionId: session.payment_intent,
         });
       } catch (err) {
         res.status(500).send({ message: "Payment verification failed" });
+      }
+    });
+
+    // Get all events registered by the logged-in user with club & event details
+    app.get("/my-registered-events", verifyJWT, async (req, res) => {
+      try {
+        const userEmail = req.tokenEmail;
+
+        const registrations = await eventRegistrationCollection
+          .find({ userEmail, status: { $ne: "cancelled" } })
+          .toArray();
+
+        if (registrations.length === 0) return res.send([]);
+
+        const eventIds = registrations.map((r) => new ObjectId(r.eventId));
+        const clubIds = registrations.map((r) => new ObjectId(r.clubId));
+
+        const [events, clubs] = await Promise.all([
+          eventsCollection.find({ _id: { $in: eventIds } }).toArray(),
+          clubsCollection.find({ _id: { $in: clubIds } }).toArray(),
+        ]);
+
+        const results = registrations.map((reg) => {
+          const event = events.find((e) => e._id.toString() === reg.eventId);
+          const club = clubs.find((c) => c._id.toString() === reg.clubId);
+
+          return {
+            registrationId: reg._id,
+            status: reg.status,
+            registeredAt: reg.registeredAt,
+            eventTitle: event?.title || "Unknown Event",
+            eventDate: event?.eventDate,
+            eventLocation: event?.location,
+            clubName: club?.clubName || "Unknown Club",
+            clubBanner: club?.bannerImage,
+          };
+        });
+        // console.log(results);
+
+        res.send(results);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Server error" });
       }
     });
 
