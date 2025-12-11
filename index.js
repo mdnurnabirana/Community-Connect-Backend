@@ -1047,6 +1047,43 @@ async function run() {
       }
     });
 
+    // Get registered users for a specific event (Manager only)
+    app.get(
+      "/manager/events/:eventId/registrations",
+      verifyJWT,
+      verifyManager,
+      async (req, res) => {
+        try {
+          const { eventId } = req.params;
+          const managerEmail = req.tokenEmail;
+
+          // Verify manager owns the event's club
+          const event = await eventsCollection.findOne({
+            _id: new ObjectId(eventId),
+          });
+          if (!event)
+            return res.status(404).send({ message: "Event not found" });
+
+          const club = await clubsCollection.findOne({
+            _id: new ObjectId(event.clubId),
+            managerEmail,
+            status: "approved",
+          });
+          if (!club) return res.status(403).send({ message: "Unauthorized" });
+
+          const registrations = await eventRegistrationCollection
+            .find({ eventId: eventId.toString() })
+            .sort({ registeredAt: -1 })
+            .toArray();
+
+          res.send(registrations);
+        } catch (err) {
+          console.error(err);
+          res.status(500).send({ message: "Server error" });
+        }
+      }
+    );
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
