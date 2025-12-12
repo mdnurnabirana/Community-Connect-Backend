@@ -1204,25 +1204,38 @@ async function run() {
       try {
         const managerEmail = req.tokenEmail;
 
+        // approved clubs for this manager
         const clubs = await clubsCollection
           .find({ managerEmail, status: "approved" })
           .toArray();
 
         const clubIds = clubs.map((c) => c._id.toString());
 
-        const [memberships, events, payments] = await Promise.all([
+        // events that belong to these clubs (so we can include event payments)
+        const events = await eventsCollection
+          .find({ clubId: { $in: clubIds } })
+          .toArray();
+
+        const eventIds = events.map((e) => e._id.toString());
+
+        const [membershipsCount, eventsCount, paymentsAgg] = await Promise.all([
+          // count active memberships for those clubs
           membershipsCollection.countDocuments({
             clubId: { $in: clubIds },
             status: "active",
           }),
+          // count events for those clubs
           eventsCollection.countDocuments({ clubId: { $in: clubIds } }),
+          // sum payments where either clubId (membership) OR eventId (event) belongs to manager
           paymentsCollection
             .aggregate([
               {
                 $match: {
-                  clubId: { $in: clubIds },
-                  type: "membership",
                   status: "completed",
+                  $or: [
+                    { clubId: { $in: clubIds } },
+                    { eventId: { $in: eventIds } },
+                  ],
                 },
               },
               { $group: { _id: null, total: { $sum: "$amount" } } },
@@ -1232,15 +1245,98 @@ async function run() {
 
         res.send({
           totalClubs: clubs.length,
-          totalMembers: memberships,
-          totalEvents: events,
-          totalRevenue: payments[0]?.total || 0,
+          totalMembers: membershipsCount,
+          totalEvents: eventsCount,
+          totalRevenue: paymentsAgg[0]?.total || 0,
         });
       } catch (err) {
         console.error(err);
         res.status(500).send({ message: "Server error" });
       }
     });
+
+    // Manager: Members over time
+    app.get(
+      "/manager/members-over-time",
+      verifyJWT,
+      verifyManager,
+      async (req, res) => {
+        try {
+          const managerEmail = req.tokenEmail;
+
+          const clubs = await clubsCollection
+            .find({ managerEmail, status: "approved" })
+            .toArray();
+
+          const clubIds = clubs.map((c) => c._id.toString());
+
+          const result = await membershipsCollection
+            .aggregate([
+              {
+                $match: {
+                  clubId: { $in: clubIds },
+                  status: "active",
+                },
+              },
+              {
+                $group: {
+                  _id: { $substr: ["$createdAt", 0, 7] }, // YYYY-MM
+                  count: { $sum: 1 },
+                },
+              },
+              { $sort: { _id: 1 } },
+            ])
+            .toArray();
+
+          res.send(result);
+        } catch (err) {
+          console.error(err);
+          res.status(500).send([]);
+        }
+      }
+    );
+
+    // Manager: Revenue over time
+    app.get(
+      "/manager/revenue-over-time",
+      verifyJWT,
+      verifyManager,
+      async (req, res) => {
+        try {
+          const managerEmail = req.tokenEmail;
+
+          const clubs = await clubsCollection
+            .find({ managerEmail, status: "approved" })
+            .toArray();
+
+          const clubIds = clubs.map((c) => c._id.toString());
+
+          const result = await paymentsCollection
+            .aggregate([
+              {
+                $match: {
+                  clubId: { $in: clubIds },
+                  type: "membership",
+                  status: "completed",
+                },
+              },
+              {
+                $group: {
+                  _id: { $substr: ["$createdAt", 0, 7] }, // YYYY-MM
+                  total: { $sum: "$amount" },
+                },
+              },
+              { $sort: { _id: 1 } },
+            ])
+            .toArray();
+
+          res.send(result);
+        } catch (err) {
+          console.error(err);
+          res.status(500).send([]);
+        }
+      }
+    );
 
     // Admin overview
     app.get("/admin/overview", verifyJWT, verifyAdmin, async (req, res) => {
