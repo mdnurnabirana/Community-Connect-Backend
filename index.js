@@ -320,12 +320,22 @@ async function run() {
       }
     );
 
-    // Get all approved clubs
+    // Get all approved clubs with optional search & category filter
     app.get("/clubs/approved", async (req, res) => {
       try {
-        const approvedClubs = await clubsCollection
-          .find({ status: "approved" })
-          .toArray();
+        const { search = "", category } = req.query;
+
+        const query = { status: "approved" };
+
+        if (search) {
+          query.clubName = { $regex: search, $options: "i" };
+        }
+
+        if (category) {
+          query.category = category;
+        }
+
+        const approvedClubs = await clubsCollection.find(query).toArray();
         res.send(approvedClubs);
       } catch (err) {
         console.error(err);
@@ -779,8 +789,19 @@ async function run() {
     // Get all events (public)
     app.get("/all-events", async (req, res) => {
       try {
-        const events = await eventsCollection.find().toArray();
+        const { search, category } = req.query;
 
+        let query = {};
+
+        if (search) {
+          query.title = { $regex: search, $options: "i" };
+        }
+
+        if (category) {
+          query.category = category;
+        }
+
+        const events = await eventsCollection.find(query).toArray();
         res.send(events);
       } catch (error) {
         console.error("Error fetching events:", error);
