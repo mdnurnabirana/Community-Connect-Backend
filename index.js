@@ -1265,6 +1265,65 @@ async function run() {
       }
     });
 
+    // GET /admin/users-over-time
+    app.get(
+      "/admin/users-over-time",
+      verifyJWT,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const usersOverTime = await usersCollection
+            .aggregate([
+              {
+                $group: {
+                  _id: {
+                    $dateToString: { format: "%Y-%m", date: "$createdAt" },
+                  },
+                  count: { $sum: 1 },
+                },
+              },
+              { $sort: { _id: 1 } },
+            ])
+            .toArray();
+
+          res.send(usersOverTime);
+        } catch (err) {
+          console.error(err);
+          res.status(500).send({ message: "Server error" });
+        }
+      }
+    );
+
+    // GET /admin/revenue-over-time
+    app.get(
+      "/admin/revenue-over-time",
+      verifyJWT,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const revenueOverTime = await paymentsCollection
+            .aggregate([
+              { $match: { status: "completed" } },
+              {
+                $group: {
+                  _id: {
+                    $dateToString: { format: "%Y-%m", date: "$createdAt" },
+                  },
+                  total: { $sum: "$amount" },
+                },
+              },
+              { $sort: { _id: 1 } },
+            ])
+            .toArray();
+
+          res.send(revenueOverTime);
+        } catch (err) {
+          console.error(err);
+          res.status(500).send({ message: "Server error" });
+        }
+      }
+    );
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
