@@ -1493,6 +1493,39 @@ async function run() {
       }
     );
 
+    // Update user profile
+    app.patch("/user/profile", verifyJWT, async (req, res) => {
+      try {
+        const userEmail = req.tokenEmail;
+        const { name, image } = req.body;
+
+        if (!userEmail)
+          return res.status(401).send({ message: "Invalid token email" });
+        if (!name && !image)
+          return res.status(400).send({ message: "Nothing to update" });
+
+        const updateFields = {};
+        if (name) updateFields.name = name;
+        if (image) updateFields.photoURL = image;
+
+        const result = await usersCollection.updateOne(
+          { email: userEmail },
+          { $set: updateFields }
+        );
+
+        if (result.matchedCount === 0)
+          return res.status(404).send({ message: "User not found" });
+
+        res.send({
+          success: true,
+          message: "Profile updated",
+          data: updateFields,
+        });
+      } catch (err) {
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
