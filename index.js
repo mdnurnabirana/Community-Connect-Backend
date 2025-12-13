@@ -379,27 +379,70 @@ async function run() {
         }
 
         const existingMembership = await membershipsCollection.findOne({
-          clubId: clubId,
-          userEmail: userEmail,
+          clubId,
+          userEmail,
         });
 
+        if (existingMembership?.status === "active") {
+          return res.status(400).send({
+            message: "You already have an active membership",
+          });
+        }
+
+        if (
+          existingMembership?.status === "pendingPayment" &&
+          existingMembership.expiresAt &&
+          existingMembership.expiresAt > new Date()
+        ) {
+          const session = await stripe.checkout.sessions.create({
+            payment_method_types: ["card"],
+            line_items: [
+              {
+                price_data: {
+                  currency: "usd",
+                  product_data: {
+                    name: club.clubName,
+                    description: club.description,
+                    images: club.bannerImage ? [club.bannerImage] : [],
+                  },
+                  unit_amount: club.membershipFee * 100,
+                },
+                quantity: 1,
+              },
+            ],
+            mode: "payment",
+            customer_email: userEmail,
+            metadata: {
+              membershipId: existingMembership._id.toString(),
+              clubId,
+              userEmail,
+            },
+            success_url: `${process.env.CLIENT_DOMAIN}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+            cancel_url: `${process.env.CLIENT_DOMAIN}/club/${clubId}`,
+          });
+
+          return res.send({
+            free: false,
+            checkoutUrl: session.url,
+            resumed: true,
+          });
+        }
+
         if (existingMembership) {
-          return res
-            .status(400)
-            .send({ message: "You already joined this club" });
+          await membershipsCollection.deleteOne({
+            _id: existingMembership._id,
+          });
         }
 
         if (club.membershipFee === 0) {
-          const membership = {
+          await membershipsCollection.insertOne({
             userEmail,
             clubId,
             status: "active",
             joinedAt: new Date(),
             expiresAt: null,
             paymentId: null,
-          };
-
-          await membershipsCollection.insertOne(membership);
+          });
 
           return res.send({
             free: true,
@@ -412,7 +455,7 @@ async function run() {
           clubId,
           status: "pendingPayment",
           joinedAt: new Date(),
-          expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24),
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
           paymentId: null,
         };
 
@@ -438,8 +481,8 @@ async function run() {
           customer_email: userEmail,
           metadata: {
             membershipId: result.insertedId.toString(),
-            clubId: clubId,
-            userEmail: userEmail,
+            clubId,
+            userEmail,
           },
           success_url: `${process.env.CLIENT_DOMAIN}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
           cancel_url: `${process.env.CLIENT_DOMAIN}/club/${clubId}`,
@@ -450,12 +493,8 @@ async function run() {
           checkoutUrl: session.url,
         });
       } catch (err) {
-        console.error("JOIN CLUB ERROR DETAILS:");
-        console.error(err);
-        res.status(500).send({
-          message: "Internal server error",
-          error: err.message,
-        });
+        console.error("JOIN CLUB ERROR:", err);
+        res.status(500).send({ message: "Internal server error" });
       }
     });
 
@@ -466,13 +505,18 @@ async function run() {
         const session = await stripe.checkout.sessions.retrieve(sessionId);
 
         const membershipId = session.metadata.membershipId;
-        const paymentIntentId = session.payment_intent; // Add this line
+        const paymentIntentId = session.payment_intent;
 
         if (session.payment_status !== "paid") {
           return res.status(400).send({ message: "Payment not completed" });
         }
 
-        // Update membership
+        await membershipsCollection.deleteMany({
+          userEmail: session.metadata.userEmail,
+          clubId: session.metadata.clubId,
+          status: "expired",
+        });
+
         await membershipsCollection.updateOne(
           { _id: new ObjectId(membershipId) },
           {
@@ -484,7 +528,6 @@ async function run() {
           }
         );
 
-        // Check duplicate
         const existingPayment = await paymentsCollection.findOne({
           stripePaymentIntentId: paymentIntentId,
         });
@@ -497,7 +540,6 @@ async function run() {
           });
         }
 
-        // Insert payment record
         await paymentsCollection.insertOne({
           userEmail: session.metadata.userEmail,
           amount: session.amount_total / 100,
