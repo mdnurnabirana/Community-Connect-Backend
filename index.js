@@ -320,10 +320,10 @@ async function run() {
       }
     );
 
-    // Get all approved clubs with optional search & category filter
+    // Get all approved clubs with search, category & sorting
     app.get("/clubs/approved", async (req, res) => {
       try {
-        const { search = "", category } = req.query;
+        const { search = "", category, sort } = req.query;
 
         const query = { status: "approved" };
 
@@ -335,7 +335,17 @@ async function run() {
           query.category = category;
         }
 
-        const approvedClubs = await clubsCollection.find(query).toArray();
+        let sortOption = { createdAt: -1 };
+
+        if (sort === "oldest") sortOption = { createdAt: 1 };
+        else if (sort === "highestFee") sortOption = { membershipFee: -1 };
+        else if (sort === "lowestFee") sortOption = { membershipFee: 1 };
+
+        const approvedClubs = await clubsCollection
+          .find(query)
+          .sort(sortOption)
+          .toArray();
+
         res.send(approvedClubs);
       } catch (err) {
         console.error(err);
