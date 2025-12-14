@@ -279,8 +279,43 @@ async function run() {
     app.get("/admin/clubs", verifyJWT, verifyAdmin, async (req, res) => {
       try {
         const clubs = await clubsCollection.find({}).toArray();
-        res.send(clubs);
+        if (!clubs.length) return res.send([]);
+
+        const clubIds = clubs.map((c) => c._id.toString());
+
+        const membersAgg = await membershipsCollection
+          .aggregate([
+            { $match: { clubId: { $in: clubIds } } },
+            { $group: { _id: "$clubId", count: { $sum: 1 } } },
+          ])
+          .toArray();
+
+        const eventsAgg = await eventsCollection
+          .aggregate([
+            { $match: { clubId: { $in: clubIds } } },
+            { $group: { _id: "$clubId", count: { $sum: 1 } } },
+          ])
+          .toArray();
+
+        const membersMap = {};
+        membersAgg.forEach((m) => {
+          membersMap[m._id] = m.count;
+        });
+
+        const eventsMap = {};
+        eventsAgg.forEach((e) => {
+          eventsMap[e._id] = e.count;
+        });
+
+        const result = clubs.map((club) => ({
+          ...club,
+          membersCount: membersMap[club._id.toString()] || 0,
+          eventsCount: eventsMap[club._id.toString()] || 0,
+        }));
+
+        res.send(result);
       } catch (err) {
+        console.error("ADMIN CLUB STATS ERROR:", err);
         res.status(500).send({ message: "Server error" });
       }
     });
