@@ -3,9 +3,10 @@ const express = require("express");
 const cors = require("cors");
 const port = process.env.PORT || 3000;
 const admin = require("firebase-admin");
-const serviceAccount = require("./firebaseAdminSDK.json");
 const { ObjectId } = require("mongodb");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf-8');
+const serviceAccount = JSON.parse(decoded);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -1564,7 +1565,7 @@ async function run() {
     // GET /clubs/featured
     app.get("/clubs/featured", async (req, res) => {
       try {
-        const limit = 8; 
+        const limit = 8;
 
         const approvedClubs = await clubsCollection
           .find({ status: "approved" })
@@ -1593,8 +1594,8 @@ async function run() {
 
         clubsWithMembers.sort((a, b) => {
           if (b.membersCount !== a.membersCount)
-            return b.membersCount - a.membersCount; 
-          return new Date(b.createdAt) - new Date(a.createdAt); 
+            return b.membersCount - a.membersCount;
+          return new Date(b.createdAt) - new Date(a.createdAt);
         });
 
         res.send(clubsWithMembers.slice(0, limit));
