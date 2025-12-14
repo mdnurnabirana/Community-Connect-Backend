@@ -1561,6 +1561,51 @@ async function run() {
       }
     });
 
+    // GET /clubs/featured
+    app.get("/clubs/featured", async (req, res) => {
+      try {
+        const limit = 8; 
+
+        const approvedClubs = await clubsCollection
+          .find({ status: "approved" })
+          .toArray();
+
+        if (!approvedClubs.length) return res.send([]);
+
+        const clubIds = approvedClubs.map((c) => c._id.toString());
+
+        const membersAgg = await membershipsCollection
+          .aggregate([
+            { $match: { clubId: { $in: clubIds } } },
+            { $group: { _id: "$clubId", membersCount: { $sum: 1 } } },
+          ])
+          .toArray();
+
+        const membersMap = {};
+        membersAgg.forEach((m) => {
+          membersMap[m._id] = m.membersCount;
+        });
+
+        const clubsWithMembers = approvedClubs.map((club) => ({
+          ...club,
+          membersCount: membersMap[club._id.toString()] || 0,
+        }));
+
+        clubsWithMembers.sort((a, b) => {
+          if (b.membersCount !== a.membersCount)
+            return b.membersCount - a.membersCount; 
+          return new Date(b.createdAt) - new Date(a.createdAt); 
+        });
+
+        res.send(clubsWithMembers.slice(0, limit));
+      } catch (err) {
+        console.error("FEATURED CLUBS ERROR:", err);
+        res
+          .status(500)
+          .send({ message: "Server error fetching featured clubs" });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
