@@ -917,51 +917,130 @@ async function run() {
       }
     });
 
-    // Register for event (free or paid)
-    app.post("/event-payment/:id/register", verifyJWT, async (req, res) => {
+    app.get("/memberships/club/:clubId/check", verifyJWT, async (req, res) => {
+      try {
+        const clubId = req.params.clubId;
+        const userEmail = req.tokenEmail;
+        const membership = await membershipsCollection.findOne({
+          userEmail,
+          clubId,
+          status: "active",
+        });
+        res.send({ hasActive: !!membership });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    app.get("/events/:id/registrationcheck", async (req, res) => {
       try {
         const eventId = req.params.id;
         const userEmail = req.tokenEmail;
+        if (!ObjectId.isValid(eventId))
+          return res.status(400).send({ message: "Invalid event ID" });
+        const registration = await eventRegistrationCollection.findOne({
+          eventId,
+          userEmail,
+        });
+        if (!registration) return res.status(200).send({ registered: false });
+        return res
+          .status(200)
+          .send({
+            registered: registration.status === "registered",
+            status: registration.status,
+            expiresAt: registration.expiresAt || null,
+          });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
 
-        if (!ObjectId.isValid(eventId)) {
-          return res.status(400).send({ message: "Invalid event id" });
-        }
-
+    app.post("/events/:id/register", verifyJWT, async (req, res) => {
+      try {
+        const eventId = req.params.id;
+        const userEmail = req.tokenEmail;
+        if (!ObjectId.isValid(eventId))
+          return res.status(400).send({ message: "Invalid event ID" });
+        const user = await usersCollection.findOne({ email: userEmail });
+        if (!user || user.role !== "member")
+          return res.status(403).send({ message: "Only members can register" });
         const event = await eventsCollection.findOne({
           _id: new ObjectId(eventId),
         });
+        if (!event) return res.status(404).send({ message: "Event not found" });
+        const membership = await membershipsCollection.findOne({
+          userEmail,
+          clubId: event.clubId,
+          status: "active",
+        });
+        if (!membership)
+          return res
+            .status(403)
+            .send({ message: "Active club membership required" });
 
-        if (!event) {
-          return res.status(404).send({ message: "Event not found" });
-        }
-
-        const exists = await eventRegistrationCollection.findOne({
+        const existingReg = await eventRegistrationCollection.findOne({
           eventId,
           userEmail,
-          status: { $ne: "cancelled" },
         });
 
-        if (exists) {
-          return res.status(400).send({
-            message: "You already registered for this event",
-          });
+        if (existingReg) {
+          if (existingReg.status === "registered")
+            return res.status(400).send({ message: "Already registered" });
+          if (
+            existingReg.status === "pendingPayment" &&
+            existingReg.expiresAt > new Date()
+          ) {
+            const session = await stripe.checkout.sessions.create({
+              payment_method_types: ["card"],
+              line_items: [
+                {
+                  price_data: {
+                    currency: "usd",
+                    product_data: {
+                      name: event.title,
+                      description: event.description,
+                    },
+                    unit_amount: event.eventFee * 100,
+                  },
+                  quantity: 1,
+                },
+              ],
+              mode: "payment",
+              customer_email: userEmail,
+              metadata: {
+                registrationId: existingReg._id.toString(),
+                eventId,
+                userEmail,
+              },
+              success_url: `${process.env.CLIENT_DOMAIN}/event-payment-success?session_id={CHECKOUT_SESSION_ID}`,
+              cancel_url: `${process.env.CLIENT_DOMAIN}/event/${eventId}`,
+            });
+            return res.send({
+              free: false,
+              checkoutUrl: session.url,
+              resumed: true,
+            });
+          }
+          if (existingReg.status === "pendingPayment")
+            await eventRegistrationCollection.deleteOne({
+              _id: existingReg._id,
+            });
         }
 
         if (!event.isPaid || event.eventFee === 0) {
-          const registration = {
+          await eventRegistrationCollection.insertOne({
             eventId,
             clubId: event.clubId,
             userEmail,
             status: "registered",
             paymentId: null,
             registeredAt: new Date(),
-          };
-
-          await eventRegistrationCollection.insertOne(registration);
-
+          });
           return res.send({
             free: true,
-            message: "Registered successfully",
+            message: "Successfully registered for free event",
           });
         }
 
@@ -970,10 +1049,10 @@ async function run() {
           clubId: event.clubId,
           userEmail,
           status: "pendingPayment",
-          paymentId: null,
           registeredAt: new Date(),
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          paymentId: null,
         };
-
         const result = await eventRegistrationCollection.insertOne(
           pendingRegistration
         );
@@ -1004,68 +1083,56 @@ async function run() {
           cancel_url: `${process.env.CLIENT_DOMAIN}/event/${eventId}`,
         });
 
-        res.send({
-          free: false,
-          checkoutUrl: session.url,
-        });
+        res.send({ free: false, checkoutUrl: session.url });
       } catch (err) {
-        console.error("EVENT REGISTRATION ERROR:", err);
+        console.error(err);
         res.status(500).send({ message: "Internal server error" });
       }
     });
 
-    app.post("/event-payment-success", async (req, res) => {
+    app.post("/events/payment-success", async (req, res) => {
       try {
         const { sessionId } = req.body;
-
         const session = await stripe.checkout.sessions.retrieve(sessionId);
-
-        const registrationId = session.metadata.registrationId;
-        const paymentIntentId = session.payment_intent; // Define it
-
-        if (session.payment_status !== "paid") {
+        if (session.payment_status !== "paid")
           return res.status(400).send({ message: "Payment not completed" });
-        }
 
-        // Update registration
-        await eventRegistrationCollection.updateOne(
-          { _id: new ObjectId(registrationId) },
-          {
-            $set: {
-              status: "registered",
-              paymentId: paymentIntentId,
-            },
-          }
-        );
-
-        // Prevent duplicate payment record
+        const { eventId, userEmail } = session.metadata;
+        const paymentIntentId = session.payment_intent;
         const existingPayment = await paymentsCollection.findOne({
           stripePaymentIntentId: paymentIntentId,
         });
-
-        if (existingPayment) {
+        if (existingPayment)
           return res.send({
             success: true,
-            transactionId: paymentIntentId,
-            message: "Already processed",
+            message: "Payment already processed",
           });
-        }
 
-        // Insert payment record
         await paymentsCollection.insertOne({
-          userEmail: session.metadata.userEmail,
+          userEmail,
           amount: session.amount_total / 100,
           type: "event",
           clubId: null,
-          eventId: session.metadata.eventId,
+          eventId,
           stripePaymentIntentId: paymentIntentId,
           status: "completed",
           createdAt: new Date(),
         });
+        await eventRegistrationCollection.updateOne(
+          { eventId, userEmail, status: "pendingPayment" },
+          {
+            $set: {
+              status: "registered",
+              paymentId: paymentIntentId,
+              expiresAt: null,
+            },
+          }
+        );
 
         res.send({
           success: true,
           transactionId: paymentIntentId,
+          message: "Event registration successful",
         });
       } catch (err) {
         console.error(err);
